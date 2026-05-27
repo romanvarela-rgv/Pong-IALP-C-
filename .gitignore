@@ -1,0 +1,9 @@
+# Binarios compilados
+pong
+src/*.o
+
+# CSV de resultados (generado en runtime)
+resultados.csv
+
+# Archivos de sistema
+.DS_Store
