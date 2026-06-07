@@ -39,6 +39,12 @@ const float BALL_SPEED_INITIAL = 5.0f;
 const float BALL_SPEED_MAX     = 14.0f;
 
 // ================================================
+// HABILIDADES ESPECIALES
+// ================================================
+const Uint32 SPECIAL_CHARGE_MS   = 10000;  // 10 s para cargar la barra
+const Uint32 SPECIAL_DURATION_MS =  4000;  // 4 s de efecto activo
+
+// ================================================
 // CANTIDAD DE PERSONAJES / PELOTAS
 // ================================================
 const int NUM_CHARACTERS = 4;
@@ -113,6 +119,11 @@ struct GameData {
     int         menuSelection;
     int         ballAnimFrame;
     Uint32      ballAnimTimer;
+    // Habilidad especial
+    Uint32      specialChargeStart;
+    bool        specialReady;
+    bool        specialActive;
+    Uint32      specialActiveEnd;
     bool        running;
     std::string resultMessage;
 };
@@ -266,9 +277,13 @@ void initGame(GameData& game, Paddle& player, Paddle& cpu, Ball& ball) {
     game.mode           = MODE_PVI;
     game.selectedChar   = CHAR_FREDDY;
     game.menuSelection  = 0;
-    game.ballAnimFrame  = 0;
-    game.ballAnimTimer  = 0;
-    game.resultMessage  = "";
+    game.ballAnimFrame      = 0;
+    game.ballAnimTimer      = 0;
+    game.specialChargeStart = 0;
+    game.specialReady       = false;
+    game.specialActive      = false;
+    game.specialActiveEnd   = 0;
+    game.resultMessage      = "";
 
     player.rect       = { 30, (WINDOW_HEIGHT - PADDLE_H) / 2, PADDLE_W, PADDLE_H };
     player.speedY     = PLAYER_SPEED;
@@ -288,8 +303,12 @@ void startNewGame(GameData& game, Paddle& player, Paddle& cpu, Ball& ball) {
     game.cpuScore       = 0;
     game.elapsedSeconds = 0;
     game.matchStartTime = SDL_GetTicks();
-    game.ballAnimFrame  = 0;
-    game.ballAnimTimer  = SDL_GetTicks();
+    game.ballAnimFrame      = 0;
+    game.ballAnimTimer      = SDL_GetTicks();
+    game.specialChargeStart = SDL_GetTicks();
+    game.specialReady       = false;
+    game.specialActive      = false;
+    game.specialActiveEnd   = 0;
 
     player.rect       = { 30, (WINDOW_HEIGHT - PADDLE_H) / 2, PADDLE_W, PADDLE_H };
     player.movingUp   = false;
@@ -438,6 +457,21 @@ void handleInput(SDL_Event& e, GameData& game, Paddle& player, Paddle& cpu, Ball
                     game.state = STATE_MENU;
                     game.menuSelection = 0;
                 }
+                if (e.key.keysym.sym == SDLK_SPACE && game.specialReady && !game.specialActive) {
+                    game.specialReady  = false;
+                    game.specialActive = true;
+                    // Jason: espera al proximo golpe (sin limite de tiempo)
+                    game.specialActiveEnd = (game.selectedChar == CHAR_JASON)
+                        ? UINT32_MAX
+                        : SDL_GetTicks() + SPECIAL_DURATION_MS;
+                    // Leatherface: agranda la paleta al activar
+                    if (game.selectedChar == CHAR_LEATHERFACE) {
+                        int cy = player.rect.y + player.rect.h / 2;
+                        player.rect.h = PADDLE_H * 3 / 2;
+                        player.rect.y = cy - player.rect.h / 2;
+                        if (player.rect.y < 0) player.rect.y = 0;
+                    }
+                }
             }
             if (e.type == SDL_KEYUP) {
                 if (e.key.keysym.sym == SDLK_w) player.movingUp   = false;
@@ -463,18 +497,42 @@ void handleInput(SDL_Event& e, GameData& game, Paddle& player, Paddle& cpu, Ball
 void updateGameplay(GameData& game, Paddle& player, Paddle& cpu, Ball& ball, SDLContext& sdl) {
     game.elapsedSeconds = (int)((SDL_GetTicks() - game.matchStartTime) / 1000);
 
+    // Carga de habilidad especial
+    if (!game.specialReady && !game.specialActive)
+        if (SDL_GetTicks() - game.specialChargeStart >= SPECIAL_CHARGE_MS)
+            game.specialReady = true;
+
+    // Expiracion del efecto (Jason expira por golpe, no por tiempo)
+    if (game.specialActive && game.selectedChar != CHAR_JASON) {
+        if (SDL_GetTicks() >= game.specialActiveEnd) {
+            game.specialActive      = false;
+            game.specialChargeStart = SDL_GetTicks();
+            if (game.selectedChar == CHAR_LEATHERFACE) {
+                int cy = player.rect.y + player.rect.h / 2;
+                player.rect.h = PADDLE_H;
+                player.rect.y = cy - player.rect.h / 2;
+                if (player.rect.y < 0) player.rect.y = 0;
+            }
+        }
+    }
+
     if (player.movingUp)   player.rect.y -= player.speedY;
     if (player.movingDown) player.rect.y += player.speedY;
     if (player.rect.y < 0)                              player.rect.y = 0;
     if (player.rect.y + player.rect.h > WINDOW_HEIGHT)  player.rect.y = WINDOW_HEIGHT - player.rect.h;
 
+    // Ghostface "Acecho": congela la paleta rival
+    bool ghostfreeze = game.specialActive && game.selectedChar == CHAR_GHOSTFACE;
+
     if (game.mode == MODE_PVI) {
-        moveCPU(cpu, ball, game.difficulty);
+        if (!ghostfreeze) moveCPU(cpu, ball, game.difficulty);
     } else {
-        if (cpu.movingUp)   cpu.rect.y -= cpu.speedY;
-        if (cpu.movingDown) cpu.rect.y += cpu.speedY;
-        if (cpu.rect.y < 0)                             cpu.rect.y = 0;
-        if (cpu.rect.y + cpu.rect.h > WINDOW_HEIGHT)   cpu.rect.y = WINDOW_HEIGHT - cpu.rect.h;
+        if (!ghostfreeze) {
+            if (cpu.movingUp)   cpu.rect.y -= cpu.speedY;
+            if (cpu.movingDown) cpu.rect.y += cpu.speedY;
+            if (cpu.rect.y < 0)                           cpu.rect.y = 0;
+            if (cpu.rect.y + cpu.rect.h > WINDOW_HEIGHT) cpu.rect.y = WINDOW_HEIGHT - cpu.rect.h;
+        }
     }
 
     ball.posX += ball.velX;
@@ -499,6 +557,13 @@ void updateGameplay(GameData& game, Paddle& player, Paddle& cpu, Ball& ball, SDL
         float relHit = ((ball.rect.y + ball.rect.h / 2.0f) - (player.rect.y + player.rect.h / 2.0f)) / (player.rect.h / 2.0f);
         ball.velY = relHit * 5.0f;
         if (ball.velX < BALL_SPEED_MAX) ball.velX *= 1.05f;
+        // Jason "Super Golpe": x1.5 en el proximo hit del jugador
+        if (game.specialActive && game.selectedChar == CHAR_JASON) {
+            ball.velX = fminf(ball.velX * 1.5f, BALL_SPEED_MAX);
+            ball.velY *= 1.5f;
+            game.specialActive      = false;
+            game.specialChargeStart = SDL_GetTicks();
+        }
         if (sdl.hitSound) Mix_PlayChannel(-1, sdl.hitSound, 0);
     }
 
@@ -722,6 +787,51 @@ void renderGameplay(SDLContext& sdl, const Paddle& player, const Paddle& cpu,
     std::ostringstream timer;
     timer << remaining / 60 << ":" << std::setfill('0') << std::setw(2) << remaining % 60;
     renderText(sdl, timer.str(), sdl.fontMedium, red, WINDOW_WIDTH / 2, 40, true);
+
+    // --- Barra de habilidad especial (bajo el marcador de P1) ---
+    {
+        const char* abilityNames[] = { "PESADILLA", "SUPER GOLPE", "ACECHO", "MOTOSIERRA" };
+        const int barX = WINDOW_WIDTH / 4 - 90;
+        const int barY = 132;
+        const int barW = 180;
+        const int barH = 10;
+
+        // Fondo
+        SDL_SetRenderDrawColor(sdl.renderer, 30, 30, 30, 255);
+        SDL_Rect barBg = { barX, barY, barW, barH };
+        SDL_RenderFillRect(sdl.renderer, &barBg);
+
+        // Fill proporcional a la carga
+        float charge = 1.0f;
+        if (!game.specialReady && !game.specialActive) {
+            Uint32 elapsed = SDL_GetTicks() - game.specialChargeStart;
+            charge = fminf(1.0f, (float)elapsed / SPECIAL_CHARGE_MS);
+        }
+        int fillW = (int)(barW * charge);
+        if (fillW > 0) {
+            if (game.specialActive) {
+                SDL_SetRenderDrawColor(sdl.renderer, 255, 200, 0, 255);  // amarillo: activo
+            } else if (game.specialReady) {
+                SDL_SetRenderDrawColor(sdl.renderer, 220, 30, 30, 255);  // rojo vivo: listo
+            } else {
+                SDL_SetRenderDrawColor(sdl.renderer, 90, 15, 15, 255);   // rojo oscuro: cargando
+            }
+            SDL_Rect barFill = { barX, barY, fillW, barH };
+            SDL_RenderFillRect(sdl.renderer, &barFill);
+        }
+
+        // Texto de estado
+        SDL_Color yellow = { 255, 200,   0, 255 };
+        SDL_Color redHud = { 220,  30,  30, 255 };
+        int textY = barY + barH + 12;
+        if (game.specialActive) {
+            std::string msg = std::string("!! ") + abilityNames[game.selectedChar] + " !!";
+            renderText(sdl, msg, sdl.fontSmall, yellow, WINDOW_WIDTH / 4, textY, true);
+        } else if (game.specialReady) {
+            std::string msg = std::string("[ESPACIO] ") + abilityNames[game.selectedChar];
+            renderText(sdl, msg, sdl.fontSmall, redHud, WINDOW_WIDTH / 4, textY, true);
+        }
+    }
 
     if (game.mode == MODE_PVI) {
         const char* diff[] = { "FACIL", "MEDIO", "DIFICIL" };
