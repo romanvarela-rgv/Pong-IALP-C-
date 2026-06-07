@@ -39,9 +39,10 @@ const float BALL_SPEED_INITIAL = 5.0f;
 const float BALL_SPEED_MAX     = 14.0f;
 
 // ================================================
-// CANTIDAD DE PERSONAJES
+// CANTIDAD DE PERSONAJES / PELOTAS
 // ================================================
 const int NUM_CHARACTERS = 4;
+const int NUM_BALLS      = 6;
 
 // ================================================
 // ESTADOS DEL JUEGO
@@ -110,6 +111,8 @@ struct GameData {
     GameMode    mode;
     Character   selectedChar;
     int         menuSelection;
+    int         ballAnimFrame;
+    Uint32      ballAnimTimer;
     bool        running;
     std::string resultMessage;
 };
@@ -118,8 +121,8 @@ struct SDLContext {
     SDL_Window*   window;
     SDL_Renderer* renderer;
 
-    SDL_Texture*  paddleTex;
-    SDL_Texture*  ballTex;
+    SDL_Texture*  paddleTex[NUM_CHARACTERS];
+    SDL_Texture*  ballTex[NUM_BALLS];
 
     TTF_Font*     fontLarge;
     TTF_Font*     fontMedium;
@@ -263,6 +266,8 @@ void initGame(GameData& game, Paddle& player, Paddle& cpu, Ball& ball) {
     game.mode           = MODE_PVI;
     game.selectedChar   = CHAR_FREDDY;
     game.menuSelection  = 0;
+    game.ballAnimFrame  = 0;
+    game.ballAnimTimer  = 0;
     game.resultMessage  = "";
 
     player.rect       = { 30, (WINDOW_HEIGHT - PADDLE_H) / 2, PADDLE_W, PADDLE_H };
@@ -283,6 +288,8 @@ void startNewGame(GameData& game, Paddle& player, Paddle& cpu, Ball& ball) {
     game.cpuScore       = 0;
     game.elapsedSeconds = 0;
     game.matchStartTime = SDL_GetTicks();
+    game.ballAnimFrame  = 0;
+    game.ballAnimTimer  = SDL_GetTicks();
 
     player.rect       = { 30, (WINDOW_HEIGHT - PADDLE_H) / 2, PADDLE_W, PADDLE_H };
     player.movingUp   = false;
@@ -519,6 +526,12 @@ void updateGameplay(GameData& game, Paddle& player, Paddle& cpu, Ball& ball, SDL
     ball.rect.x = (int)ball.posX;
     ball.rect.y = (int)ball.posY;
 
+    // Animacion de la pelota: avanza un frame cada 80 ms (~12 fps)
+    if (SDL_GetTicks() - game.ballAnimTimer >= 80) {
+        game.ballAnimFrame = (game.ballAnimFrame + 1) % NUM_BALLS;
+        game.ballAnimTimer = SDL_GetTicks();
+    }
+
     checkEndCondition(game);
 }
 
@@ -675,17 +688,19 @@ void renderGameplay(SDLContext& sdl, const Paddle& player, const Paddle& cpu,
         }
     }
 
-    if (sdl.paddleTex) {
-        SDL_RenderCopy(sdl.renderer, sdl.paddleTex, nullptr, &player.rect);
-        SDL_RenderCopy(sdl.renderer, sdl.paddleTex, nullptr, &cpu.rect);
+    SDL_Texture* paddle = sdl.paddleTex[game.selectedChar];
+    if (paddle) {
+        SDL_RenderCopy(sdl.renderer, paddle, nullptr, &player.rect);
+        SDL_RenderCopy(sdl.renderer, paddle, nullptr, &cpu.rect);
     } else {
         SDL_SetRenderDrawColor(sdl.renderer, 255, 255, 255, 255);
         SDL_RenderFillRect(sdl.renderer, &player.rect);
         SDL_RenderFillRect(sdl.renderer, &cpu.rect);
     }
 
-    if (sdl.ballTex) {
-        SDL_RenderCopy(sdl.renderer, sdl.ballTex, nullptr, &ball.rect);
+    SDL_Texture* ballFrame = sdl.ballTex[game.ballAnimFrame];
+    if (ballFrame) {
+        SDL_RenderCopy(sdl.renderer, ballFrame, nullptr, &ball.rect);
     } else {
         SDL_SetRenderDrawColor(sdl.renderer, 255, 255, 255, 255);
         SDL_RenderFillRect(sdl.renderer, &ball.rect);
@@ -775,9 +790,19 @@ int main(int /*argc*/, char* /*argv*/[]) {
     sdl.window   = window;
     sdl.renderer = renderer;
 
-    // Sprites
-    sdl.paddleTex = IMG_LoadTexture(renderer, "assets/images/paddle.png");
-    sdl.ballTex   = IMG_LoadTexture(renderer, "assets/images/ball.png");
+    // Paletas (una por personaje)
+    sdl.paddleTex[CHAR_FREDDY]      = IMG_LoadTexture(renderer, "assets/images/FreddyPaddle.png");
+    sdl.paddleTex[CHAR_JASON]       = IMG_LoadTexture(renderer, "assets/images/JasonPaddle.png");
+    sdl.paddleTex[CHAR_GHOSTFACE]   = IMG_LoadTexture(renderer, "assets/images/GhostfacePaddle.png");
+    sdl.paddleTex[CHAR_LEATHERFACE] = IMG_LoadTexture(renderer, "assets/images/LeatherfacePaddle.png");
+
+    // Pelota animada (6 frames)
+    sdl.ballTex[0] = IMG_LoadTexture(renderer, "assets/images/ball1.png");
+    sdl.ballTex[1] = IMG_LoadTexture(renderer, "assets/images/ball2.png");
+    sdl.ballTex[2] = IMG_LoadTexture(renderer, "assets/images/ball3.png");
+    sdl.ballTex[3] = IMG_LoadTexture(renderer, "assets/images/ball4.png");
+    sdl.ballTex[4] = IMG_LoadTexture(renderer, "assets/images/ball5.png");
+    sdl.ballTex[5] = IMG_LoadTexture(renderer, "assets/images/ball6.png");
 
     // Fondos de menus
     sdl.bgMenu       = IMG_LoadTexture(renderer, "assets/images/bg_menu.png");
@@ -854,8 +879,10 @@ int main(int /*argc*/, char* /*argv*/[]) {
     // ================================================
     cleanupAudio(sdl);
 
-    if (sdl.paddleTex) SDL_DestroyTexture(sdl.paddleTex);
-    if (sdl.ballTex)   SDL_DestroyTexture(sdl.ballTex);
+    for (int i = 0; i < NUM_CHARACTERS; i++)
+        if (sdl.paddleTex[i]) SDL_DestroyTexture(sdl.paddleTex[i]);
+    for (int i = 0; i < NUM_BALLS; i++)
+        if (sdl.ballTex[i]) SDL_DestroyTexture(sdl.ballTex[i]);
 
     if (sdl.bgMenu)       SDL_DestroyTexture(sdl.bgMenu);
     if (sdl.bgModeSelect) SDL_DestroyTexture(sdl.bgModeSelect);
